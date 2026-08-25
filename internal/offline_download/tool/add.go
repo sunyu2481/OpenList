@@ -2,7 +2,6 @@ package tool
 
 import (
 	"context"
-	"fmt"
 	"net/url"
 	stdpath "path"
 	"path/filepath"
@@ -68,30 +67,28 @@ func AddURL(ctx context.Context, args *AddURLArgs) (task.TaskExtensionInfo, erro
 			return nil, errors.WithStack(errs.NotFolder)
 		}
 	}
+	scheme := urlScheme(args.URL)
+
+	// ed2k 由少数工具支持，不支持的直接报错，不静默改用其他工具——
+	// 用户选定的工具决定了任务落到哪个网盘，替换会带来意料之外的转存。
+	if scheme == ed2kScheme {
+		if _, unsupported := ed2kUnsupportedTools[args.Tool]; unsupported {
+			return nil, errs.NewErr(errs.NotSupport,
+				"%s does not support ed2k links, please use Thunder/ThunderX/ThunderBrowser or PikPak", args.Tool)
+		}
+	}
+
 	// try putting url
 	if args.Tool == "SimpleHttp" {
-		if isSimpleHttpSchemeUnsupported(args.URL) {
-			return nil, fmt.Errorf("SimpleHttp tool does not support this URL scheme, please use aria2 or other tools for magnet/ed2k links")
+		if scheme != "" && scheme != "http" && scheme != "https" {
+			return nil, errs.NewErr(errs.NotSupport,
+				"SimpleHttp does not support %s links, please use aria2 or another download tool", scheme)
 		}
 		err = tryPutUrl(ctx, args.DstDirPath, args.URL)
 		if err == nil || !errors.Is(err, errs.NotImplement) {
 			return nil, err
 		}
 		// Fallback to creating a download task when storage lacks native PutURL support.
-	}
-
-	// ed2k 链接自动路由：如果当前工具不支持 ed2k，自动尝试使用迅雷系工具
-	if isEd2kURL(args.URL) {
-		if !isEd2kCapableTool(args.Tool) {
-			// 尝试找到一个可用的支持 ed2k 的工具
-			fallbackTool, fallbackName := findEd2kCapableTool()
-			if fallbackTool != nil {
-				// 使用找到的迅雷工具替代
-				args.Tool = fallbackName
-			} else {
-				return nil, fmt.Errorf("ed2k protocol is not supported by %s. Please configure and use Thunder/ThunderX/ThunderBrowser for ed2k links", args.Tool)
-			}
-		}
 	}
 
 	// get tool
@@ -203,47 +200,49 @@ func tryPutUrl(ctx context.Context, path, urlStr string) error {
 	return fs.PutURL(ctx, path, dstName, urlStr)
 }
 
-func isSimpleHttpSchemeUnsupported(urlStr string) bool {
-	u, err := url.Parse(strings.TrimSpace(urlStr))
-	if err != nil || u.Scheme == "" {
-		return false
+const ed2kScheme = "ed2k"
+
+// urlScheme 取出 URL 的小写 scheme，无法识别时返回空串。
+// 不能直接用 url.Parse：ed2k 链接形如 ed2k://|file|name|size|hash|/，
+// 其中的 "|" 会让 url.Parse 报 invalid character in host name。
+func urlScheme(urlStr string) string {
+	urlStr = strings.TrimSpace(urlStr)
+	i := strings.Index(urlStr, ":")
+	if i <= 0 {
+		return ""
 	}
-	scheme := strings.ToLower(u.Scheme)
-	return scheme != "http" && scheme != "https"
-}
-
-// isEd2kURL 检测 URL 是否为 ed2k 协议
-func isEd2kURL(urlStr string) bool {
-	return strings.HasPrefix(strings.ToLower(urlStr), "ed2k://")
-}
-
-// ed2kCapableTools 支持 ed2k 协议的工具列表（迅雷系）
-var ed2kCapableTools = []string{"Thunder", "ThunderX", "ThunderBrowser"}
-
-// isEd2kCapableTool 检查工具是否支持 ed2k 协议
-func isEd2kCapableTool(toolName string) bool {
-	for _, t := range ed2kCapableTools {
-		if t == toolName {
-			return true
-		}
-	}
-	return false
-}
-
-// findEd2kCapableTool 查找一个可用的支持 ed2k 的工具
-func findEd2kCapableTool() (Tool, string) {
-	for _, name := range ed2kCapableTools {
-		t, err := Tools.Get(name)
-		if err != nil {
-			continue
-		}
-		if t.IsReady() {
-			return t, name
-		}
-		// 尝试初始化
-		if _, err := t.Init(); err == nil && t.IsReady() {
-			return t, name
+	scheme := strings.ToLower(urlStr[:i])
+	// RFC 3986: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+	for j := 0; j < len(scheme); j++ {
+		c := scheme[j]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9', c == '+', c == '-', c == '.':
+			if j == 0 {
+				return ""
+			}
+		default:
+			return ""
 		}
 	}
-	return nil, ""
+	return scheme
+}
+
+// ed2kUnsupportedTools 列出确定不支持 ed2k 的工具。
+// 采用黑名单而非白名单：其余工具把链接透传给各自的网盘服务端，
+// 由服务端判断能否处理，新增网盘工具时无需回来改这里。
+var ed2kUnsupportedTools = map[string]struct{}{
+	"SimpleHttp":   {},
+	"aria2":        {},
+	"qBittorrent":  {},
+	"Transmission": {},
+}
+
+// Ed2kUnsupportedToolNames 返回不支持 ed2k 的工具名，供测试校验名字与注册名一致。
+func Ed2kUnsupportedToolNames() []string {
+	names := make([]string, 0, len(ed2kUnsupportedTools))
+	for name := range ed2kUnsupportedTools {
+		names = append(names, name)
+	}
+	return names
 }
