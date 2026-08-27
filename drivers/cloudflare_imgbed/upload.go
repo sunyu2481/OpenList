@@ -155,9 +155,7 @@ func (d *CFImgBed) chunkedUpload(ctx context.Context, dstDir model.Obj, file mod
 	fileMime := file.GetMimetype()
 	fileName := file.GetName()
 
-	var chunkSizeMap = map[string]int64{
-
-	}
+	var chunkSizeMap = map[string]int64{}
 	chunkSize := chunkSizeMap[channelType]
 	if chunkSize == 0 {
 		chunkSize = 5 * 1024 * 1024
