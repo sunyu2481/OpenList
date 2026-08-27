@@ -1,0 +1,156 @@
+name: Docker
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      as_latest:
+        description: "同时打上 latest 标签"
+        required: true
+        default: "false"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository_owner }}/openlist
+  PLATFORMS: linux/amd64,linux/arm64
+  ARTIFACT: openlist-binaries
+
+jobs:
+  # 二进制只编译一次，两个镜像变体共用。
+  # 全部走 CGO_ENABLED=0：sqlite 用纯 Go 的 glebarez driver，
+  # 因此不需要上游那套 musl 交叉工具链（那是为 loong64/mips 和 CGO sqlite 准备的）。
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.26.4"
+
+      - name: Fetch web dist
+        run: bash build.sh release web
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: |
+          set -e
+          version="${GITHUB_REF_NAME}"
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            version="main-$(git rev-parse --short HEAD)"
+          fi
+          web_version=$(cat public/dist/VERSION 2>/dev/null || echo "unknown")
+          echo "backend version: $version / frontend version: $web_version"
+
+          pkg="github.com/OpenListTeam/OpenList/v4/internal/conf"
+          ldflags="-w -s \
+            -X '${pkg}.BuiltAt=$(date +'%F %T %z')' \
+            -X '${pkg}.GitAuthor=${{ github.repository_owner }}' \
+            -X '${pkg}.GitCommit=$(git rev-parse --short HEAD)' \
+            -X '${pkg}.Version=${version}' \
+            -X '${pkg}.WebVersion=${web_version}'"
+
+          # 输出路径必须匹配 Dockerfile.ci 里的 build/${TARGETPLATFORM}/openlist
+          for arch in amd64 arm64; do
+            echo "building linux/$arch"
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch \
+              go build -o "build/linux/$arch/openlist" -ldflags="$ldflags" -tags=jsoniter .
+          done
+          ls -lR build/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: build/
+          overwrite: true
+          if-no-files-found: error
+
+  push:
+    name: Push ${{ matrix.name }} image
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # base：纯净版
+          - name: base
+            base_image_tag: base
+            build_arg: ""
+            tag_favor: ""
+          # aio：内置 ffmpeg（视频缩略图）与 aria2（离线下载）
+          - name: aio
+            base_image_tag: aio
+            build_arg: |
+              INSTALL_FFMPEG=true
+              INSTALL_ARIA2=true
+            tag_favor: "suffix=-aio,onlatest=true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ env.ARTIFACT }}
+          path: build/
+
+      # Dockerfile.ci 里的 RUN /entrypoint.sh version 需要在目标架构下执行
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=main-,enable={{is_default_branch}}
+          flavor: |
+            latest=${{ github.ref_type == 'tag' || github.event.inputs.as_latest == 'true' }}
+            ${{ matrix.tag_favor }}
+
+      - name: Build and push
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          file: Dockerfile.ci
+          push: true
+          platforms: ${{ env.PLATFORMS }}
+          build-args: |
+            BASE_IMAGE_TAG=${{ matrix.base_image_tag }}
+            ${{ matrix.build_arg }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}

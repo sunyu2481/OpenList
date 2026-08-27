@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Format, vet & build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.26.4"
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l cmd drivers internal pkg server *.go)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未经 gofmt 格式化，请运行 gofmt -w："
+            echo "$unformatted"
+            exit 1
+          fi
+
+      # -printf=false：上游代码有 13 处 non-constant format string
+      # （Go 1.24 起 printf 分析器新增的检查），全在 drivers/ 与
+      # internal/offline_download/ 里。修掉会与上游同步冲突，且属纯噪音，
+      # 故只关掉 printf，保留 copylocks / loopclosure / nilfunc 等其余分析器。
+      - name: go vet
+        run: go vet -tags=jsoniter -printf=false ./...
+
+      # 只编译不产出二进制；覆盖 Docker 镜像的两个目标架构。
+      # 不需要前端 dist —— public/dist 里的占位文件足够让 //go:embed 匹配成功。
+      - name: Build
+        run: |
+          set -e
+          for arch in amd64 arm64; do
+            echo "building linux/$arch"
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -tags=jsoniter -o /dev/null .
+          done
