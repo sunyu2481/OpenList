@@ -17,6 +17,7 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/drivers/thunder_browser"
 	"github.com/OpenListTeam/OpenList/v4/drivers/thunderx"
 	"github.com/OpenListTeam/OpenList/v4/internal/conf"
+	"github.com/OpenListTeam/OpenList/v4/internal/driver"
 	"github.com/OpenListTeam/OpenList/v4/internal/errs"
 	"github.com/OpenListTeam/OpenList/v4/internal/fs"
 	"github.com/OpenListTeam/OpenList/v4/internal/model"
@@ -226,6 +227,32 @@ func urlScheme(urlStr string) string {
 		}
 	}
 	return scheme
+}
+
+// toolNameForStorage 返回 storage 对应的原生离线下载工具名，没有则返回空串。
+func toolNameForStorage(storage driver.Driver) string {
+	switch storage.(type) {
+	case *_115.Pan115:
+		return "115 Cloud"
+	case *_115_open.Open115:
+		return "115 Open"
+	case *_123.Pan123:
+		return "123Pan"
+	case *_123_open.Open123:
+		return "123 Open"
+	case *guangyapan.GuangYaPan:
+		return "GuangYaPan"
+	case *pikpak.PikPak:
+		return "PikPak"
+	case *thunder.Thunder:
+		return "Thunder"
+	case *thunderx.ThunderX:
+		return "ThunderX"
+	case *thunder_browser.ThunderBrowser, *thunder_browser.ThunderBrowserExpert:
+		return "ThunderBrowser"
+	default:
+		return ""
+	}
 }
 
 // ed2kUnsupportedTools 列出确定不支持 ed2k 的工具。
