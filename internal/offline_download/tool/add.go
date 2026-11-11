@@ -24,7 +24,6 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/internal/op"
 	"github.com/OpenListTeam/OpenList/v4/internal/setting"
 	"github.com/OpenListTeam/OpenList/v4/internal/task"
-	"github.com/OpenListTeam/OpenList/v4/server/common"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 )
@@ -177,7 +176,7 @@ func AddURL(ctx context.Context, args *AddURLArgs) (task.TaskExtensionInfo, erro
 	t := &DownloadTask{
 		TaskExtension: task.TaskExtension{
 			Creator: taskCreator,
-			ApiUrl:  common.GetApiUrl(ctx),
+			ApiUrl:  conf.GetApiUrl(ctx),
 		},
 		Url:          args.URL,
 		DstDirPath:   args.DstDirPath,
@@ -229,8 +228,8 @@ func urlScheme(urlStr string) string {
 	return scheme
 }
 
-// toolNameForStorage 返回 storage 对应的原生离线下载工具名，没有则返回空串。
-func toolNameForStorage(storage driver.Driver) string {
+// NativeToolName 返回存储对应的原生离线下载工具名，没有则返回空串。
+func NativeToolName(storage driver.Driver) string {
 	switch storage.(type) {
 	case *_115.Pan115:
 		return "115 Cloud"
