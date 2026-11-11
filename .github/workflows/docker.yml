@@ -137,7 +137,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=main-,enable={{is_default_branch}}
           flavor: |
-            latest=${{ github.ref_type == 'tag' || github.event.inputs.as_latest == 'true' }}
+            latest=${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.ref_type == 'tag' || github.event.inputs.as_latest == 'true' }}
             ${{ matrix.tag_favor }}
 
       - name: Build and push
